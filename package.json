@@ -1,0 +1,47 @@
+{
+  "name": "xendit-proxy-webhook",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-tenant Xendit payment gateway and durable webhook router",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "dev:worker": "tsx watch src/worker.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "start:worker": "node dist/worker.js",
+    "migrate": "node dist/db/migrate.js",
+    "admin": "tsx src/cli/admin.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@fastify/rate-limit": "^10.3.0",
+    "fastify": "^5.6.2",
+    "ipaddr.js": "^2.2.0",
+    "pg": "^8.16.3",
+    "pino": "^9.9.5",
+    "re2js": "^2.8.6",
+    "undici": "^7.16.0",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.37.0",
+    "@testcontainers/postgresql": "^11.7.2",
+    "@types/node": "^24.6.1",
+    "@types/pg": "^8.15.5",
+    "@vitest/coverage-v8": "^3.2.4",
+    "eslint": "^9.37.0",
+    "testcontainers": "^11.7.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.45.0",
+    "vitest": "^3.2.4"
+  }
+}

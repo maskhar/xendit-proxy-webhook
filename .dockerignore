@@ -1,0 +1,16 @@
+node_modules
+**/node_modules
+dist
+coverage
+.env
+.env.*
+!.env.example
+secrets
+.git
+.claude
+.codegraph
+*.log
+*.pem
+*.key
+*.p12
+*.pfx

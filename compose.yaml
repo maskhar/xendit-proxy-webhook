@@ -1,0 +1,171 @@
+# Copy .env.example to .env, replace placeholders, and create secrets/* before starting.
+# Test and live require separate deployment directories, Compose projects,
+# domains, secrets, images and databases. Project name alone does not isolate ./secrets.
+name: ${COMPOSE_PROJECT_NAME:-xendit-proxy-test}
+
+x-gateway-env: &gateway-env
+  NODE_ENV: production
+  APP_ENV: ${APP_ENV:-test}
+  HOST: 0.0.0.0
+  PORT: "3000"
+  ADMIN_HOST: 127.0.0.1
+  ADMIN_PORT: "3001"
+  DATABASE_URL_FILE: /run/secrets/database_url
+  DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-20}
+  XENDIT_API_BASE_URL: https://api.xendit.co
+  ALLOW_INSECURE_XENDIT_BASE_URL: "false"
+  XENDIT_API_VERSION: "2024-11-11"
+  XENDIT_BUSINESS_ID: ${XENDIT_BUSINESS_ID:?Set XENDIT_BUSINESS_ID in .env}
+  XENDIT_API_KEY_FILE: /run/secrets/xendit_api_key
+  XENDIT_CALLBACK_TOKEN_FILE: /run/secrets/xendit_callback_token
+  ENCRYPTION_KEY_FILE: /run/secrets/encryption_key
+  ADMIN_TOKEN_FILE: /run/secrets/admin_token
+  PROVIDER_TIMEOUT_MS: ${PROVIDER_TIMEOUT_MS:-20000}
+  WEBHOOK_BODY_LIMIT_BYTES: ${WEBHOOK_BODY_LIMIT_BYTES:-1048576}
+  API_BODY_LIMIT_BYTES: ${API_BODY_LIMIT_BYTES:-262144}
+  DELIVERY_BATCH_SIZE: ${DELIVERY_BATCH_SIZE:-20}
+  DELIVERY_POLL_MS: ${DELIVERY_POLL_MS:-1000}
+  DELIVERY_LEASE_MS: ${DELIVERY_LEASE_MS:-60000}
+  DELIVERY_TIMEOUT_MS: ${DELIVERY_TIMEOUT_MS:-15000}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+
+x-gateway-secrets: &gateway-secrets
+  - database_url
+  - xendit_api_key
+  - xendit_callback_token
+  - encryption_key
+  - admin_token
+
+x-gateway-hardening: &gateway-hardening
+  read_only: true
+  tmpfs:
+    - /tmp:mode=1777,size=16m
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  db:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: xproxy
+      POSTGRES_USER: xproxy
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - private
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xproxy -d xproxy"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  migrate:
+    build: .
+    image: xendit-proxy:${COMPOSE_PROJECT_NAME:-xendit-proxy-test}
+    command: ["node", "dist/db/migrate.js"]
+    environment: *gateway-env
+    secrets: *gateway-secrets
+    networks:
+      - private
+    depends_on:
+      db:
+        condition: service_healthy
+    <<: *gateway-hardening
+    restart: "no"
+
+  api:
+    image: xendit-proxy:${COMPOSE_PROJECT_NAME:-xendit-proxy-test}
+    restart: unless-stopped
+    command: ["node", "dist/server.js"]
+    environment: *gateway-env
+    secrets: *gateway-secrets
+    networks:
+      - private
+      - edge
+      - outbound
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # /readyz requires DB, migration and recent worker heartbeat.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    <<: *gateway-hardening
+
+  worker:
+    image: xendit-proxy:${COMPOSE_PROJECT_NAME:-xendit-proxy-test}
+    restart: unless-stopped
+    stop_grace_period: 30s
+    command: ["node", "dist/worker.js"]
+    environment: *gateway-env
+    secrets: *gateway-secrets
+    networks:
+      - private
+      - outbound
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    <<: *gateway-hardening
+
+  caddy:
+    # Pin to tested digest before production rollout; floating tag aids local setup only.
+    image: caddy:2
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    environment:
+      GATEWAY_DOMAIN: ${GATEWAY_DOMAIN:?Set GATEWAY_DOMAIN and configure DNS before starting}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    tmpfs:
+      - /tmp:mode=1777,size=16m
+    networks:
+      - edge
+    depends_on:
+      api:
+        condition: service_healthy
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  database_url:
+    file: ./secrets/database_url
+  xendit_api_key:
+    file: ./secrets/xendit_api_key
+  xendit_callback_token:
+    file: ./secrets/xendit_callback_token
+  encryption_key:
+    file: ./secrets/encryption_key
+  admin_token:
+    file: ./secrets/admin_token
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  private:
+    internal: true
+  edge:
+  outbound:
